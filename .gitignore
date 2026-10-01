@@ -1,0 +1,10 @@
+# 构建产物
+.build/
+.swiftpm/
+FontCompare.app/
+
+# macOS
+.DS_Store
+
+# 替身 / 别名文件
+*替身
