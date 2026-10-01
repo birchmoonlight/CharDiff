@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         var text: String?
         var exportPath: String?
         var overlay = false
+        var dark = false
     }
 
     private let launch = AppDelegate.parseArguments()
@@ -34,6 +35,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 if let value { options.exportPath = value; index += 1 }
             case "--overlay":
                 options.overlay = true
+            case "--dark":
+                options.dark = true
             default:
                 break
             }
@@ -61,6 +64,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                         keyEquivalent: "q")
         appItem.submenu = appMenu
 
+        // 没有「编辑」菜单，⌘C/⌘V/⌘A 就不会被分发到输入框——macOS 的快捷键是走菜单的。
+        let editItem = NSMenuItem()
+        mainMenu.addItem(editItem)
+        let editMenu = NSMenu(title: "编辑")
+        editMenu.addItem(withTitle: "撤销",
+                         action: Selector(("undo:")),
+                         keyEquivalent: "z")
+        editMenu.addItem(withTitle: "重做",
+                         action: Selector(("redo:")),
+                         keyEquivalent: "Z")
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "剪切",
+                         action: #selector(NSText.cut(_:)),
+                         keyEquivalent: "x")
+        editMenu.addItem(withTitle: "拷贝",
+                         action: #selector(NSText.copy(_:)),
+                         keyEquivalent: "c")
+        editMenu.addItem(withTitle: "粘贴",
+                         action: #selector(NSText.paste(_:)),
+                         keyEquivalent: "v")
+        editMenu.addItem(withTitle: "全选",
+                         action: #selector(NSText.selectAll(_:)),
+                         keyEquivalent: "a")
+        editItem.submenu = editMenu
+
         let windowItem = NSMenuItem()
         mainMenu.addItem(windowItem)
         let windowMenu = NSMenu(title: "窗口")
@@ -78,6 +106,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenu()
+        if launch.dark {
+            NSApp.appearance = NSAppearance(named: .darkAqua)
+        }
         let controller = MainViewController()
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1180, height: 820),

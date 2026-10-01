@@ -82,7 +82,8 @@ final class CompareView: NSView {
         }
     }
 
-    override func mouseDown(with event: NSEvent) {
+    /// 松手才算一次点击，按下就复制的话拖着鼠标划过会连着一串。
+    override func mouseUp(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         let (placed, _) = layoutCells(in: bounds.width)
         guard let index = placed.firstIndex(where: { $0.rect.contains(point) }) else { return }
@@ -94,10 +95,17 @@ final class CompareView: NSView {
         highlightedIndex = index
         needsDisplay = true
         highlightTimer?.invalidate()
-        highlightTimer = Timer.scheduledTimer(withTimeInterval: 1.1, repeats: false) { [weak self] _ in
+        highlightTimer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: false) { [weak self] _ in
             self?.highlightedIndex = nil
             self?.needsDisplay = true
         }
+    }
+
+    /// 触控板双指捏合，回传放大倍数（1.0 表示没变）。
+    var onMagnify: ((CGFloat) -> Void)?
+
+    override func magnify(with event: NSEvent) {
+        onMagnify?(1 + event.magnification)
     }
 
     private func draggedFontURLs(_ info: NSDraggingInfo) -> [URL] {
@@ -116,11 +124,39 @@ final class CompareView: NSView {
     private let cellGap: CGFloat = 0         // 列与列、排与排之间的间隙
     private let minGlyphWidth: CGFloat = 12
 
-    // MARK: - 配色（固定浅色，字体对比需要白底黑字）
+    // MARK: - 配色（跟随系统深浅色）
 
-    private let colorA = NSColor(calibratedRed: 0.10, green: 0.11, blue: 0.13, alpha: 1).cgColor
-    private let colorB = NSColor(calibratedRed: 0.88, green: 0.20, blue: 0.17, alpha: 1).cgColor
-    private let guideColor = NSColor(calibratedRed: 0.30, green: 0.55, blue: 0.95, alpha: 0.30)
+    private var isDark: Bool {
+        effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+    }
+
+    private var canvasColor: NSColor {
+        isDark ? NSColor(calibratedWhite: 0.12, alpha: 1) : .white
+    }
+
+    private var colorA: CGColor {
+        (isDark ? NSColor(calibratedWhite: 0.93, alpha: 1)
+                : NSColor(calibratedRed: 0.10, green: 0.11, blue: 0.13, alpha: 1)).cgColor
+    }
+
+    private var colorB: CGColor {
+        (isDark ? NSColor(calibratedRed: 1.00, green: 0.46, blue: 0.40, alpha: 1)
+                : NSColor(calibratedRed: 0.88, green: 0.20, blue: 0.17, alpha: 1)).cgColor
+    }
+
+    private var guideColor: CGColor {
+        NSColor(calibratedRed: 0.30, green: 0.55, blue: 0.95,
+                alpha: isDark ? 0.45 : 0.30).cgColor
+    }
+
+    private var highlightColor: NSColor {
+        NSColor.controlAccentColor.withAlphaComponent(isDark ? 0.30 : 0.14)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
 
     // MARK: - 计算缓存
 
@@ -297,7 +333,7 @@ final class CompareView: NSView {
     // MARK: - 绘制
 
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.white.setFill()
+        canvasColor.setFill()
         bounds.fill()
 
         let ctA = fontA?.font(size: pointSize)
@@ -312,7 +348,7 @@ final class CompareView: NSView {
 
         // 复制反馈：给点中的那一列垫个底色
         if let index = highlightedIndex, index < placed.count {
-            NSColor.controlAccentColor.withAlphaComponent(0.14).setFill()
+            highlightColor.setFill()
             let box = placed[index].rect.insetBy(dx: -3, dy: -3)
             NSBezierPath(roundedRect: box, xRadius: 5, yRadius: 5).fill()
         }
@@ -358,7 +394,7 @@ final class CompareView: NSView {
     private func drawGuides(at x: CGFloat, baseline: CGFloat, in rect: NSRect, context ctx: CGContext) {
         guard showGuides else { return }
         ctx.saveGState()
-        ctx.setStrokeColor(guideColor.cgColor)
+        ctx.setStrokeColor(guideColor)
         ctx.setLineWidth(1)
         ctx.setLineDash(phase: 0, lengths: [2, 3])
 

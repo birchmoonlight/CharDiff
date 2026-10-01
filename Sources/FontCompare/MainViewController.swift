@@ -13,7 +13,9 @@ final class MainViewController: NSViewController {
     private let sizeValueLabel = NSTextField(labelWithString: "72")
     private let overlayCheck = NSButton(checkboxWithTitle: "叠加", target: nil, action: nil)
     private let guidesCheck = NSButton(checkboxWithTitle: "参考线", target: nil, action: nil)
-    private let charField = NSTextField(string: "")
+    private let charTextView = NSTextView()
+    private let charScrollView = NSScrollView()
+    private var charHeightConstraint: NSLayoutConstraint!
 
     private let defaultCharacters = "永国这们的一是不了在人有我他大来以个中上水火山石田日月天地"
         + "AaGgRrQq0123&?@"
@@ -31,7 +33,7 @@ final class MainViewController: NSViewController {
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.drawsBackground = true
-        scrollView.backgroundColor = .white
+        scrollView.backgroundColor = .textBackgroundColor
         scrollView.autohidesScrollers = true
 
         compareView.translatesAutoresizingMaskIntoConstraints = false
@@ -63,6 +65,8 @@ final class MainViewController: NSViewController {
             scrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            // 画布保底高度，输入框再高也压不没它
+            scrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 200),
 
             // documentView 宽度跟随可视区，高度靠 intrinsicContentSize
             compareView.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
@@ -74,6 +78,11 @@ final class MainViewController: NSViewController {
 
         compareView.onDropFonts = { [weak self] items in
             self?.acceptDroppedFonts(items)
+        }
+        compareView.onMagnify = { [weak self] factor in
+            guard let self else { return }
+            self.applySize(CGFloat(self.sizeSlider.doubleValue) * factor, persist: false)
+            self.scheduleSave()
         }
         setupSlots()
 
@@ -89,9 +98,9 @@ final class MainViewController: NSViewController {
 
     private func restoreSettings() {
         if let text = settings.string(forKey: "characters"), !text.isEmpty {
-            charField.stringValue = text
+            charTextView.string = text
         } else {
-            charField.stringValue = defaultCharacters
+            charTextView.string = defaultCharacters
         }
 
         if let path = settings.string(forKey: "fontA") {
@@ -122,7 +131,7 @@ final class MainViewController: NSViewController {
     }
 
     private func saveSettings() {
-        settings.set(charField.stringValue, forKey: "characters")
+        settings.set(charTextView.string, forKey: "characters")
         settings.set(itemA?.url.path, forKey: "fontA")
         settings.set(itemB?.url.path, forKey: "fontB")
         settings.set(Double(compareView.pointSize), forKey: "pointSize")
@@ -184,22 +193,71 @@ final class MainViewController: NSViewController {
         let stack = NSStackView()
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.orientation = .horizontal
-        stack.alignment = .centerY
+        stack.alignment = .top
         stack.spacing = 10
         stack.edgeInsets = NSEdgeInsets(top: 10, left: 16, bottom: 10, right: 16)
 
         let title = NSTextField(labelWithString: "字符")
         title.textColor = .secondaryLabelColor
 
-        charField.delegate = self
-        charField.placeholderString = "在这里粘贴要对比的字符，顺序随意，重复的会自动去掉"
-        charField.font = .systemFont(ofSize: 14)
-        charField.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        charField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        charTextView.isRichText = false
+        charTextView.font = .systemFont(ofSize: 14)
+        charTextView.delegate = self
+        charTextView.allowsUndo = true
+        charTextView.isAutomaticQuoteSubstitutionEnabled = false
+        charTextView.isAutomaticDashSubstitutionEnabled = false
+        charTextView.isAutomaticTextReplacementEnabled = false
+        charTextView.drawsBackground = false
+        charTextView.textContainerInset = NSSize(width: 4, height: 5)
+        charTextView.isVerticallyResizable = true
+        charTextView.isHorizontallyResizable = false
+        charTextView.autoresizingMask = [.width]
+        charTextView.textContainer?.widthTracksTextView = true
+        charTextView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+
+        charScrollView.documentView = charTextView
+        charScrollView.translatesAutoresizingMaskIntoConstraints = false
+        charScrollView.hasVerticalScroller = true
+        charScrollView.hasHorizontalScroller = false
+        charScrollView.autohidesScrollers = true
+        charScrollView.drawsBackground = true
+        charScrollView.backgroundColor = .textBackgroundColor
+        charScrollView.borderType = .bezelBorder
+        charScrollView.toolTip = "粘贴要对比的字符，顺序随意，重复的会自动去掉"
+
+        charHeightConstraint = charScrollView.heightAnchor.constraint(equalToConstant: 28)
+        charHeightConstraint.isActive = true
 
         stack.addArrangedSubview(title)
-        stack.addArrangedSubview(charField)
+        stack.addArrangedSubview(charScrollView)
         return stack
+    }
+
+    /// 输入框随内容长高，但最多 4 行，再多就在框内滚动，画布不会被挤没。
+    private func updateCharFieldHeight() {
+        guard let layoutManager = charTextView.layoutManager,
+              let textContainer = charTextView.textContainer,
+              let font = charTextView.font else { return }
+
+        layoutManager.ensureLayout(for: textContainer)
+        let used = layoutManager.usedRect(for: textContainer).height
+        let inset = charTextView.textContainerInset.height * 2
+        let lineHeight = layoutManager.defaultLineHeight(for: font)
+        let chrome: CGFloat = 5   // 边框占的高度
+
+        let minHeight = ceil(lineHeight + inset + chrome)
+        let maxHeight = ceil(lineHeight * 4 + inset + chrome)
+        let target = min(max(ceil(used + inset + chrome), minHeight), maxHeight)
+
+        if abs(charHeightConstraint.constant - target) > 0.5 {
+            charHeightConstraint.constant = target
+        }
+    }
+
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        // 宽度变了换行就变，高度得跟着重算。
+        updateCharFieldHeight()
     }
 
     // MARK: - 动作
@@ -244,10 +302,26 @@ final class MainViewController: NSViewController {
     }
 
     @objc private func sizeChanged() {
-        let size = CGFloat(sizeSlider.doubleValue.rounded())
-        sizeValueLabel.stringValue = String(Int(size))
-        compareView.pointSize = size
-        saveSettings()
+        applySize(CGFloat(sizeSlider.doubleValue), persist: true)
+    }
+
+    /// 字号不取整，双指缩放开合才跟手；显示时再取整。
+    private func applySize(_ size: CGFloat, persist: Bool) {
+        let clamped = min(max(size, CGFloat(sizeSlider.minValue)), CGFloat(sizeSlider.maxValue))
+        sizeSlider.doubleValue = Double(clamped)
+        sizeValueLabel.stringValue = String(Int(clamped.rounded()))
+        compareView.pointSize = clamped
+        if persist { saveSettings() }
+    }
+
+    /// 缩放过程中每次落盘太费，停手后再存。
+    private var saveTimer: Timer?
+
+    private func scheduleSave() {
+        saveTimer?.invalidate()
+        saveTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: false) { [weak self] _ in
+            self?.saveSettings()
+        }
     }
 
     @objc private func toggleOverlay() {
@@ -310,7 +384,7 @@ final class MainViewController: NSViewController {
     func applyLaunchOptions(fontA: URL?, fontB: URL?, text: String?, overlay: Bool = false) {
         if let fontA, let item = FontItem.load(url: fontA) { itemA = item }
         if let fontB, let item = FontItem.load(url: fontB) { itemB = item }
-        if let text { charField.stringValue = text }
+        if let text { charTextView.string = text }
         overlayCheck.state = overlay ? .on : .off
         compareView.overlayMode = overlay
         applyCharacters()
@@ -320,7 +394,7 @@ final class MainViewController: NSViewController {
     private func applyCharacters() {
         var seen = Set<String>()
         var list: [String] = []
-        for character in charField.stringValue {
+        for character in charTextView.string {
             let s = String(character)
             if s == "\n" || s == "\r" || s == "\t" { continue }
             if seen.insert(s).inserted { list.append(s) }
@@ -330,9 +404,10 @@ final class MainViewController: NSViewController {
     }
 }
 
-extension MainViewController: NSTextFieldDelegate {
-    func controlTextDidChange(_ obj: Notification) {
-        guard (obj.object as? NSTextField) === charField else { return }
+extension MainViewController: NSTextViewDelegate {
+    func textDidChange(_ notification: Notification) {
+        guard (notification.object as? NSTextView) === charTextView else { return }
         applyCharacters()
+        updateCharFieldHeight()
     }
 }
