@@ -69,6 +69,37 @@ final class CompareView: NSView {
         return true
     }
 
+    // MARK: - 点击复制
+
+    private var highlightedIndex: Int?
+    private var highlightTimer: Timer?
+
+    /// 只有真的能点的字符列才显示手型。
+    override func resetCursorRects() {
+        let (placed, _) = layoutCells(in: bounds.width)
+        for item in placed {
+            addCursorRect(item.rect, cursor: .pointingHand)
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        let (placed, _) = layoutCells(in: bounds.width)
+        guard let index = placed.firstIndex(where: { $0.rect.contains(point) }) else { return }
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(placed[index].cell.text, forType: .string)
+
+        highlightedIndex = index
+        needsDisplay = true
+        highlightTimer?.invalidate()
+        highlightTimer = Timer.scheduledTimer(withTimeInterval: 1.1, repeats: false) { [weak self] _ in
+            self?.highlightedIndex = nil
+            self?.needsDisplay = true
+        }
+    }
+
     private func draggedFontURLs(_ info: NSDraggingInfo) -> [URL] {
         let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
         guard let urls = info.draggingPasteboard.readObjects(forClasses: [NSURL.self],
@@ -79,10 +110,10 @@ final class CompareView: NSView {
     // MARK: - 布局常量
 
     private let outerMargin: CGFloat = 16
-    private let cellPaddingH: CGFloat = 6    // 字符之间靠这两份 padding 加 columnGap 拉开
-    private let cellPaddingV: CGFloat = 10
-    private let rowGap: CGFloat = 14         // A 行与 B 行之间的间隙
-    private let columnGap: CGFloat = 10      // 字符列之间的间隙
+    private let cellPaddingH: CGFloat = 0    // 列宽就是最宽那个字体的宽度，不留人为间距
+    private let cellPaddingV: CGFloat = 6
+    private let rowGap: CGFloat = 6          // A 行与 B 行之间的间隙
+    private let cellGap: CGFloat = 0         // 列与列、排与排之间的间隙
     private let minGlyphWidth: CGFloat = 12
 
     // MARK: - 配色（固定浅色，字体对比需要白底黑字）
@@ -152,18 +183,10 @@ final class CompareView: NSView {
             return
         }
 
-        // 上下边界同时参考字体的 ascent/descent 与每个字形的实际墨迹，
-        // 变形字体常有超出字身框的笔画。
-        var ascender: CGFloat = 0
-        var descender: CGFloat = 0
-        if let ctA {
-            ascender = max(ascender, CTFontGetAscent(ctA))
-            descender = max(descender, CTFontGetDescent(ctA))
-        }
-        if let ctB {
-            ascender = max(ascender, CTFontGetAscent(ctB))
-            descender = max(descender, CTFontGetDescent(ctB))
-        }
+        // 行高按实际墨迹算。字体的 ascent/descent 留白很大，中文字形根本用不满，
+        // 照那个排上下两行会离得太远。变形字体超出字身框的笔画也一并算进来。
+        var inkTop: CGFloat = 0
+        var inkBottom: CGFloat = 0
 
         var maxLeft: CGFloat = 0
         var built: [Cell] = []
@@ -177,8 +200,8 @@ final class CompareView: NSView {
             let advA = la?.ctLine.map(lineWidth) ?? 0
             let advB = lb?.ctLine.map(lineWidth) ?? 0
 
-            ascender = max(ascender, inkA.maxY, inkB.maxY)
-            descender = max(descender, -inkA.minY, -inkB.minY)
+            inkTop = max(inkTop, inkA.maxY, inkB.maxY)
+            inkBottom = max(inkBottom, -inkA.minY, -inkB.minY)
 
             // 原点左侧可能有负 LSB，所有列共用同一份左侧余量，原点才对得齐。
             let left = max(0, -inkA.minX, -inkB.minX)
@@ -188,8 +211,9 @@ final class CompareView: NSView {
             built.append(Cell(text: ch, a: la, b: lb, contentWidth: left + right))
         }
 
-        maxAscender = ceil(ascender)
-        maxDescender = ceil(descender)
+        // 全是标点这类矮字符时给个下限，免得行高塌成一条。
+        maxAscender = ceil(max(inkTop, pointSize * 0.55))
+        maxDescender = ceil(max(inkBottom, pointSize * 0.10))
         unitHeight = maxAscender + maxDescender
         maxLeftOverflow = ceil(maxLeft)
         cells = built
@@ -244,10 +268,10 @@ final class CompareView: NSView {
             let w = cellWidth(cell)
             if x + w > limitX && x > outerMargin {
                 x = outerMargin
-                y += cellHeight + columnGap
+                y += cellHeight + cellGap
             }
             placed.append(Placed(cell: cell, rect: NSRect(x: x, y: y, width: w, height: cellHeight)))
-            x += w + columnGap
+            x += w + cellGap
         }
 
         return (placed, y + cellHeight + outerMargin)
@@ -285,6 +309,13 @@ final class CompareView: NSView {
         }
 
         let (placed, _) = layoutCells(in: bounds.width)
+
+        // 复制反馈：给点中的那一列垫个底色
+        if let index = highlightedIndex, index < placed.count {
+            NSColor.controlAccentColor.withAlphaComponent(0.14).setFill()
+            let box = placed[index].rect.insetBy(dx: -3, dy: -3)
+            NSBezierPath(roundedRect: box, xRadius: 5, yRadius: 5).fill()
+        }
 
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         // flipped 视图里画 CoreText 需要再翻一次，否则字形上下颠倒。
