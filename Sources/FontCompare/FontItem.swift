@@ -8,6 +8,12 @@ struct FontItem {
     let postScriptName: String
     let descriptor: CTFontDescriptor
 
+    static let supportedExtensions: Set<String> = ["ttf", "otf", "ttc", "otc"]
+
+    static func isFontFile(_ url: URL) -> Bool {
+        supportedExtensions.contains(url.pathExtension.lowercased())
+    }
+
     static func load(url: URL) -> FontItem? {
         guard let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor],
               let descriptor = descriptors.first else { return nil }

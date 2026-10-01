@@ -1,8 +1,8 @@
 import AppKit
 import CoreText
 
-/// 对比画布：每个字符一个格子，两个字体的同一字符从同一个原点起画（原点对齐）。
-/// 格宽按字符的实际墨迹边界算，窄字符就是窄格子。
+/// 对比画布：每个字符一列，两个字体的同一字符从同一条原点起画（原点对齐）。
+/// 列宽由两者中较宽的那个决定，所以宽的紧贴自身宽度、窄的自然留出空白。
 final class CompareView: NSView {
 
     // MARK: - 输入
@@ -23,22 +23,73 @@ final class CompareView: NSView {
 
     override var isFlipped: Bool { true }
 
+    /// 拖字体文件到画布上时回调，按拖入顺序给出。
+    var onDropFonts: (([FontItem]) -> Void)?
+
+    private var isTargeted = false {
+        didSet {
+            layer?.borderWidth = isTargeted ? 3 : 0
+            layer?.borderColor = isTargeted ? NSColor.controlAccentColor.cgColor : nil
+        }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        registerForDraggedTypes([.fileURL])
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        wantsLayer = true
+        registerForDraggedTypes([.fileURL])
+    }
+
+    // MARK: - 拖放
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard !draggedFontURLs(sender).isEmpty else { return [] }
+        isTargeted = true
+        return .copy
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        isTargeted = false
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        !draggedFontURLs(sender).isEmpty
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        isTargeted = false
+        let items = draggedFontURLs(sender).compactMap { FontItem.load(url: $0) }
+        guard !items.isEmpty else { return false }
+        onDropFonts?(items)
+        return true
+    }
+
+    private func draggedFontURLs(_ info: NSDraggingInfo) -> [URL] {
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+        guard let urls = info.draggingPasteboard.readObjects(forClasses: [NSURL.self],
+                                                             options: options) as? [URL] else { return [] }
+        return urls.filter { FontItem.isFontFile($0) }
+    }
+
     // MARK: - 布局常量
 
     private let outerMargin: CGFloat = 16
-    private let cellPaddingH: CGFloat = 18   // 原点左右各留的空白
-    private let cellPaddingV: CGFloat = 14
-    private let rowGap: CGFloat = 10         // A 行与 B 行之间的间隙
-    private let columnGap: CGFloat = 6       // 格子之间的间隙
-    private let minGlyphWidth: CGFloat = 20
+    private let cellPaddingH: CGFloat = 6    // 字符之间靠这两份 padding 加 columnGap 拉开
+    private let cellPaddingV: CGFloat = 10
+    private let rowGap: CGFloat = 14         // A 行与 B 行之间的间隙
+    private let columnGap: CGFloat = 10      // 字符列之间的间隙
+    private let minGlyphWidth: CGFloat = 12
 
     // MARK: - 配色（固定浅色，字体对比需要白底黑字）
 
     private let colorA = NSColor(calibratedRed: 0.10, green: 0.11, blue: 0.13, alpha: 1).cgColor
     private let colorB = NSColor(calibratedRed: 0.88, green: 0.20, blue: 0.17, alpha: 1).cgColor
-    private let cellFill = NSColor(calibratedWhite: 0.965, alpha: 1)
-    private let cellStroke = NSColor(calibratedWhite: 0.87, alpha: 1)
-    private let guideColor = NSColor(calibratedRed: 0.30, green: 0.55, blue: 0.95, alpha: 0.38)
+    private let guideColor = NSColor(calibratedRed: 0.30, green: 0.55, blue: 0.95, alpha: 0.30)
 
     // MARK: - 计算缓存
 
@@ -49,8 +100,9 @@ final class CompareView: NSView {
 
     private struct Cell {
         let text: String
-        let a: Line
-        let b: Line
+        /// nil 表示这个槽还没选字体。
+        let a: Line?
+        let b: Line?
         /// 墨迹宽度（含向左溢出部分），不含左右 padding。
         let contentWidth: CGFloat
     }
@@ -66,10 +118,18 @@ final class CompareView: NSView {
     private var maxLeftOverflow: CGFloat = 0
     private var unitHeight: CGFloat = 0
 
+    /// 选了字体才占一行，只选一个字体时就只画一行。
+    private var lineCount: Int {
+        var count = 0
+        if fontA != nil { count += 1 }
+        if fontB != nil { count += 1 }
+        return max(count, 1)
+    }
+
     private var cellHeight: CGFloat {
-        overlayMode
-            ? unitHeight + cellPaddingV * 2
-            : unitHeight * 2 + rowGap + cellPaddingV * 2
+        if overlayMode { return unitHeight + cellPaddingV * 2 }
+        let rows = CGFloat(lineCount)
+        return unitHeight * rows + rowGap * (rows - 1) + cellPaddingV * 2
     }
 
     private func cellWidth(_ cell: Cell) -> CGFloat {
@@ -82,36 +142,45 @@ final class CompareView: NSView {
         cells.removeAll()
         maxLeftOverflow = 0
 
-        guard let fa = fontA, let fb = fontB, !characters.isEmpty else {
+        let ctA = fontA?.font(size: pointSize)
+        let ctB = fontB?.font(size: pointSize)
+
+        guard ctA != nil || ctB != nil, !characters.isEmpty else {
             unitHeight = 0
             invalidateIntrinsicContentSize()
             needsDisplay = true
             return
         }
 
-        let a = fa.font(size: pointSize)
-        let b = fb.font(size: pointSize)
-
         // 上下边界同时参考字体的 ascent/descent 与每个字形的实际墨迹，
         // 变形字体常有超出字身框的笔画。
-        var ascender = max(CTFontGetAscent(a), CTFontGetAscent(b))
-        var descender = max(CTFontGetDescent(a), CTFontGetDescent(b))
+        var ascender: CGFloat = 0
+        var descender: CGFloat = 0
+        if let ctA {
+            ascender = max(ascender, CTFontGetAscent(ctA))
+            descender = max(descender, CTFontGetDescent(ctA))
+        }
+        if let ctB {
+            ascender = max(ascender, CTFontGetAscent(ctB))
+            descender = max(descender, CTFontGetDescent(ctB))
+        }
+
         var maxLeft: CGFloat = 0
         var built: [Cell] = []
 
         for ch in characters {
-            let la = makeLine(ch, font: a)
-            let lb = makeLine(ch, font: b)
+            let la = ctA.map { makeLine(ch, font: $0) }
+            let lb = ctB.map { makeLine(ch, font: $0) }
 
-            let inkA = la.ctLine.map(inkBounds) ?? .zero
-            let inkB = lb.ctLine.map(inkBounds) ?? .zero
-            let advA = la.ctLine.map(lineWidth) ?? 0
-            let advB = lb.ctLine.map(lineWidth) ?? 0
+            let inkA = la?.ctLine.map(inkBounds) ?? .zero
+            let inkB = lb?.ctLine.map(inkBounds) ?? .zero
+            let advA = la?.ctLine.map(lineWidth) ?? 0
+            let advB = lb?.ctLine.map(lineWidth) ?? 0
 
             ascender = max(ascender, inkA.maxY, inkB.maxY)
             descender = max(descender, -inkA.minY, -inkB.minY)
 
-            // 原点左侧可能有负 LSB，所有格子共用同一份左侧余量，原点才对得齐。
+            // 原点左侧可能有负 LSB，所有列共用同一份左侧余量，原点才对得齐。
             let left = max(0, -inkA.minX, -inkB.minX)
             let right = max(advA, advB, inkA.maxX, inkB.maxX, minGlyphWidth)
             maxLeft = max(maxLeft, left)
@@ -162,7 +231,7 @@ final class CompareView: NSView {
 
     // MARK: - 排布
 
-    /// 从左到右依次摆放，放不下就换行。每格宽度随字符宽度变化。
+    /// 从左到右依次摆放，放不下就换行。每列宽度随字符宽度变化。
     private func layoutCells(in width: CGFloat) -> ([Placed], CGFloat) {
         guard !cells.isEmpty, cellHeight > 0 else { return ([], 200) }
         let limitX = max(width - outerMargin, outerMargin + 1)
@@ -207,40 +276,26 @@ final class CompareView: NSView {
         NSColor.white.setFill()
         bounds.fill()
 
-        guard let fa = fontA, let fb = fontB, !cells.isEmpty else {
+        let ctA = fontA?.font(size: pointSize)
+        let ctB = fontB?.font(size: pointSize)
+
+        guard ctA != nil || ctB != nil, !cells.isEmpty else {
             drawPlaceholder()
             return
         }
 
         let (placed, _) = layoutCells(in: bounds.width)
 
-        // 第一遍只铺格子底，第二遍才落字。
-        // 否则上一格溢出的笔画会被下一格的底色盖掉。
-        for item in placed {
-            drawBox(item.rect)
-        }
-
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         // flipped 视图里画 CoreText 需要再翻一次，否则字形上下颠倒。
         ctx.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
 
-        let a = fa.font(size: pointSize)
-        let b = fb.font(size: pointSize)
         for item in placed {
-            drawGlyphs(item, fontA: a, fontB: b, context: ctx)
+            drawGlyphs(item, fontA: ctA, fontB: ctB, context: ctx)
         }
     }
 
-    private func drawBox(_ rect: NSRect) {
-        let box = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
-        cellFill.setFill()
-        box.fill()
-        cellStroke.setStroke()
-        box.lineWidth = 1
-        box.stroke()
-    }
-
-    private func drawGlyphs(_ item: Placed, fontA: CTFont, fontB: CTFont, context ctx: CGContext) {
+    private func drawGlyphs(_ item: Placed, fontA: CTFont?, fontB: CTFont?, context ctx: CGContext) {
         let rect = item.rect
         let originX = rect.minX + cellPaddingH + maxLeftOverflow
         let top = rect.minY + cellPaddingV
@@ -248,20 +303,24 @@ final class CompareView: NSView {
         if overlayMode {
             let baseline = top + maxAscender
             drawGuides(at: originX, baseline: baseline, in: rect, context: ctx)
-            // A 打底，B 半透明压在上面，重合处颜色变深。
-            draw(line: item.cell.a, at: CGPoint(x: originX, y: baseline),
-                 color: colorA, alpha: 1, context: ctx)
-            draw(line: item.cell.b, at: CGPoint(x: originX, y: baseline),
-                 color: colorB, alpha: 0.6, context: ctx)
-        } else {
-            let baseA = top + maxAscender
-            let baseB = top + unitHeight + rowGap + maxAscender
-            drawGuides(at: originX, baseline: baseA, in: rect, context: ctx)
-            drawGuides(at: originX, baseline: baseB, in: rect, context: ctx)
-            draw(line: item.cell.a, at: CGPoint(x: originX, y: baseA),
-                 color: colorA, alpha: 1, context: ctx)
-            draw(line: item.cell.b, at: CGPoint(x: originX, y: baseB),
-                 color: colorB, alpha: 1, context: ctx)
+            if let a = item.cell.a {
+                draw(line: a, at: CGPoint(x: originX, y: baseline), color: colorA, alpha: 1, context: ctx)
+            }
+            if let b = item.cell.b {
+                // 下面没有 A 垫着就不用半透明了。
+                let alpha: CGFloat = item.cell.a == nil ? 1 : 0.6
+                draw(line: b, at: CGPoint(x: originX, y: baseline), color: colorB, alpha: alpha, context: ctx)
+            }
+            return
+        }
+
+        var row = 0
+        for (line, color) in [(item.cell.a, colorA), (item.cell.b, colorB)] {
+            guard let line else { continue }
+            let baseline = top + maxAscender + CGFloat(row) * (unitHeight + rowGap)
+            drawGuides(at: originX, baseline: baseline, in: rect, context: ctx)
+            draw(line: line, at: CGPoint(x: originX, y: baseline), color: color, alpha: 1, context: ctx)
+            row += 1
         }
     }
 
@@ -307,9 +366,7 @@ final class CompareView: NSView {
     private func drawPlaceholder() {
         let text: String
         if fontA == nil && fontB == nil {
-            text = "先选两个字体文件"
-        } else if fontA == nil || fontB == nil {
-            text = "还差一个字体"
+            text = "拖字体文件进来，或点上方的方框选择"
         } else {
             text = "输入要对比的字符"
         }

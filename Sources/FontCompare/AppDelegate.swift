@@ -1,8 +1,11 @@
 import AppKit
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private var window: NSWindow?
+
+    /// 与 MainViewController 用同一个 suite。
+    private let settings = UserDefaults(suiteName: "local.fontcompare") ?? .standard
 
     private struct LaunchOptions {
         var fontA: URL?
@@ -83,13 +86,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             defer: false
         )
         window.title = "字体字符对比"
+        window.minSize = NSSize(width: 1040, height: 480)
         window.contentViewController = controller
         controller.applyLaunchOptions(fontA: launch.fontA,
                                       fontB: launch.fontB,
                                       text: launch.text,
                                       overlay: launch.overlay)
-        window.setFrameAutosaveName("FontCompareWindow")
-        window.center()
+        window.delegate = self
+
+        // 恢复上次的位置和大小，位置失效（比如显示器拔了）就回到屏幕中央。
+        if let saved = settings.string(forKey: "windowFrame") {
+            let frame = NSRectFromString(saved)
+            let onScreen = NSScreen.screens.contains { $0.visibleFrame.intersects(frame) }
+            if onScreen && frame.width > 300 && frame.height > 200 {
+                window.setFrame(frame, display: false)
+            } else {
+                window.center()
+            }
+        } else {
+            window.center()
+        }
+
         window.makeKeyAndOrderFront(nil)
 
         self.window = window
@@ -105,5 +122,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
+    }
+
+    // MARK: - 窗口位置
+
+    func windowDidMove(_ notification: Notification) { saveWindowFrame() }
+    func windowDidResize(_ notification: Notification) { saveWindowFrame() }
+
+    private func saveWindowFrame() {
+        guard let window else { return }
+        settings.set(NSStringFromRect(window.frame), forKey: "windowFrame")
+        // 退出前如果只移动过一次、还没落盘，这里保证写下去。
+        settings.synchronize()
     }
 }
