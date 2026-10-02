@@ -14,6 +14,11 @@ final class MainViewController: NSViewController {
     private let guidesCheck = NSButton(checkboxWithTitle: "参考线", target: nil, action: nil)
     private let newlineCheck = NSButton(checkboxWithTitle: "换行", target: nil, action: nil)
     private let dedupeCheck = NSButton(checkboxWithTitle: "去重", target: nil, action: nil)
+    private let writeLabel = ClickableLabel(title: "写txt时")
+
+    /// 挑目标 txt 的窗口，给「新建」按钮留着用来关掉它。
+    private weak var activePanel: NSSavePanel?
+    private var wantsNewTargetFile = false
 
     private let charTextView = NSTextView()
     private let charScrollView = NSScrollView()
@@ -270,9 +275,10 @@ final class MainViewController: NSViewController {
         guidesCheck.toolTip = "标出每个字符的原点与基线"
         guidesCheck.font = .systemFont(ofSize: 12)
 
-        let writeLabel = NSTextField(labelWithString: "写txt时:")
         writeLabel.textColor = .tertiaryLabelColor
         writeLabel.font = .systemFont(ofSize: 11)
+        writeLabel.onClick = { [weak self] in self?.changeTargetFile() }
+        updateWriteLabelHint()
 
         newlineCheck.target = self
         newlineCheck.action = #selector(toggleWriteOptions)
@@ -306,7 +312,8 @@ final class MainViewController: NSViewController {
         let stack = NSStackView()
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.orientation = .horizontal
-        stack.alignment = .top
+        // 输入框会长高，「字符」两个字跟着居中，不吊在顶上。
+        stack.alignment = .centerY
         stack.spacing = 10
         stack.edgeInsets = NSEdgeInsets(top: 8, left: 16, bottom: 8, right: 16)
 
@@ -330,6 +337,8 @@ final class MainViewController: NSViewController {
         charTextView.autoresizingMask = [.width]
         charTextView.textContainer?.widthTracksTextView = true
         charTextView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        // 长 txt 不必一次排完，用到哪排到哪。
+        charTextView.layoutManager?.allowsNonContiguousLayout = true
 
         charScrollView.documentView = charTextView
         charScrollView.translatesAutoresizingMaskIntoConstraints = false
@@ -390,20 +399,87 @@ final class MainViewController: NSViewController {
         }
     }
 
-    private func pickFileURL() -> URL? {
-        if let path = settings.string(forKey: "pickFile") {
+    /// 左键点字符写到哪个 txt。定过一次就一直用它，除非用户自己点「写txt时」换。
+    private func pickFileURL(changing: Bool = false) -> URL? {
+        if !changing, let path = settings.string(forKey: "pickFile") {
             return URL(fileURLWithPath: path)
         }
+        guard let url = promptForTargetFile() else { return nil }
+        settings.set(url.path, forKey: "pickFile")
+        updateWriteLabelHint()
+        return url
+    }
+
+    /// 挑一个已有的 txt，或者当场新建一个——手上还没 txt 的人也得走得下去。
+    private func promptForTargetFile() -> URL? {
+        let panel = NSOpenPanel()
+        panel.message = "挑一个 txt，左键点的字会追加到它后面"
+        panel.prompt = "就用它"
+        panel.allowedContentTypes = [.plainText, .text]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.directoryURL = targetDirectory
+        panel.accessoryView = makeNewFileAccessory()
+        // 不点开会话里的「显示选项」也得看得见，不然没人找得到新建按钮。
+        panel.isAccessoryViewDisclosed = true
+
+        activePanel = panel
+        wantsNewTargetFile = false
+        let response = panel.runModal()
+        activePanel = nil
+
+        if wantsNewTargetFile { return promptForNewTargetFile(in: panel.directoryURL) }
+        guard response == .OK, let url = panel.url else { return nil }
+        return url
+    }
+
+    /// 选择窗口右下角那个「新建一个 txt」。
+    private func makeNewFileAccessory() -> NSView {
+        let button = NSButton(title: "新建一个 txt…", target: self, action: #selector(newTargetFileTapped))
+        button.bezelStyle = .rounded
+        button.sizeToFit()
+        let holder = NSView(frame: NSRect(x: 0, y: 0,
+                                          width: button.frame.width + 20,
+                                          height: button.frame.height + 16))
+        button.setFrameOrigin(NSPoint(x: 10, y: 8))
+        holder.addSubview(button)
+        return holder
+    }
+
+    @objc private func newTargetFileTapped() {
+        wantsNewTargetFile = true
+        activePanel?.cancel(nil)
+    }
+
+    private func promptForNewTargetFile(in directory: URL?) -> URL? {
         let panel = NSSavePanel()
-        panel.message = "选一个文本文件，之后左键点的字都追加到这里"
+        panel.message = "新建一个 txt。碰到同名文件不会清空它，字是接着后面写的。"
+        panel.prompt = "新建"
         panel.nameFieldStringValue = "挑字.txt"
         panel.canCreateDirectories = true
-        // 默认落在字体 A 的文件夹，没有 A 就退到 B。
-        panel.directoryURL = itemA?.url.deletingLastPathComponent()
-            ?? itemB?.url.deletingLastPathComponent()
+        panel.directoryURL = directory ?? targetDirectory
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
-        settings.set(url.path, forKey: "pickFile")
         return url
+    }
+
+    /// 默认落在字体 A 的文件夹，没有 A 就退到 B。
+    private var targetDirectory: URL? {
+        if let path = settings.string(forKey: "pickFile") {
+            return URL(fileURLWithPath: path).deletingLastPathComponent()
+        }
+        return itemA?.url.deletingLastPathComponent() ?? itemB?.url.deletingLastPathComponent()
+    }
+
+    private func updateWriteLabelHint() {
+        if let path = settings.string(forKey: "pickFile") {
+            writeLabel.toolTip = "点一下换一个 txt。现在写到：\(path)"
+        } else {
+            writeLabel.toolTip = "点一下挑一个 txt，左键点的字都写进去"
+        }
+    }
+
+    private func changeTargetFile() {
+        _ = pickFileURL(changing: true)
     }
 
     private func copyToPasteboard(_ text: String) {
@@ -418,20 +494,31 @@ final class MainViewController: NSViewController {
               let textContainer = charTextView.textContainer,
               let font = charTextView.font else { return }
 
-        layoutManager.ensureLayout(for: textContainer)
-        let used = layoutManager.usedRect(for: textContainer).height
         let inset = charTextView.textContainerInset.height * 2
         let lineHeight = layoutManager.defaultLineHeight(for: font)
         let chrome: CGFloat = 5   // 边框占的高度
 
         let minHeight = ceil(lineHeight + inset + chrome)
         let maxHeight = ceil(lineHeight * 4 + inset + chrome)
-        let target = min(max(ceil(used + inset + chrome), minHeight), maxHeight)
+
+        // 量高度要先让 TextKit 把整篇排一遍。长 txt 有几千上万字，这一下就得等很久，
+        // 所以字多到肯定超过 4 行时直接按最高算，不量了。
+        let target: CGFloat
+        if (charTextView.string as NSString).length > Self.measureLimit {
+            target = maxHeight
+        } else {
+            layoutManager.ensureLayout(for: textContainer)
+            let used = layoutManager.usedRect(for: textContainer).height
+            target = min(max(ceil(used + inset + chrome), minHeight), maxHeight)
+        }
 
         if abs(charHeightConstraint.constant - target) > 0.5 {
             charHeightConstraint.constant = target
         }
     }
+
+    /// 超过这个字数就懒得量了——4 行怎么都装不下。
+    private static let measureLimit = 400
 
     override func viewDidLayout() {
         super.viewDidLayout()
@@ -559,6 +646,9 @@ final class MainViewController: NSViewController {
     }
 
     /// 把当前画布整幅渲染成 PNG。
+    /// 画布是否已经排完版，导出前用它等一等长文本。
+    var isCompareIdle: Bool { !compareView.isBuilding }
+
     func exportSnapshot(to url: URL) {
         view.layoutSubtreeIfNeeded()
         let height = compareView.intrinsicContentSize.height
@@ -626,7 +716,8 @@ final class MainViewController: NSViewController {
             list.append(s)
         }
         compareView.characters = list
-        saveSettings()
+        // 整串字存一次要写盘，长 txt 下每敲一个字都写会卡，攒一下再写。
+        scheduleSave()
     }
 }
 

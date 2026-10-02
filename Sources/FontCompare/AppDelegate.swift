@@ -144,10 +144,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
 
         if let path = launch.exportPath {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                controller.exportSnapshot(to: URL(fileURLWithPath: path))
-                NSApp.terminate(nil)
-            }
+            exportWhenReady(controller, to: URL(fileURLWithPath: path), waited: 0)
+        }
+    }
+
+    /// 长文本是后台排版的，等它排完再导，不然截到的是空画布。
+    private func exportWhenReady(_ controller: MainViewController, to url: URL, waited: TimeInterval) {
+        let deadline: TimeInterval = 20
+        if (waited > 0.8 && controller.isCompareIdle) || waited > deadline {
+            controller.exportSnapshot(to: url)
+            NSApp.terminate(nil)
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            self?.exportWhenReady(controller, to: url, waited: waited + 0.2)
         }
     }
 
