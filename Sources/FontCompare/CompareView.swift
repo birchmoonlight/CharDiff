@@ -69,10 +69,24 @@ final class CompareView: NSView {
         return true
     }
 
-    // MARK: - 点击复制
+    // MARK: - 点击反馈
+
+    private enum FlashStyle { case append, copy }
 
     private var highlightedIndex: Int?
+    private var flashStyle: FlashStyle = .append
     private var highlightTimer: Timer?
+
+    private func flash(_ index: Int, style: FlashStyle) {
+        highlightedIndex = index
+        flashStyle = style
+        needsDisplay = true
+        highlightTimer?.invalidate()
+        highlightTimer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: false) { [weak self] _ in
+            self?.highlightedIndex = nil
+            self?.needsDisplay = true
+        }
+    }
 
     /// 只有真的能点的字符列才显示手型。
     override func resetCursorRects() {
@@ -82,23 +96,29 @@ final class CompareView: NSView {
         }
     }
 
-    /// 松手才算一次点击，按下就复制的话拖着鼠标划过会连着一串。
+    /// 左键：把字符追加到指定文件。
+    var onAppendCharacter: ((String) -> Void)?
+
+    /// 右键：把字符复制到剪贴板。
+    var onCopyCharacter: ((String) -> Void)?
+
+    /// 松手才算一次点击，按下就触发的话拖着鼠标划过会连着一串。
     override func mouseUp(with event: NSEvent) {
+        guard let index = characterIndex(at: event) else { return }
+        flash(index, style: .append)
+        onAppendCharacter?(cells[index].text)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        guard let index = characterIndex(at: event) else { return }
+        flash(index, style: .copy)
+        onCopyCharacter?(cells[index].text)
+    }
+
+    private func characterIndex(at event: NSEvent) -> Int? {
         let point = convert(event.locationInWindow, from: nil)
         let (placed, _) = layoutCells(in: bounds.width)
-        guard let index = placed.firstIndex(where: { $0.rect.contains(point) }) else { return }
-
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(placed[index].cell.text, forType: .string)
-
-        highlightedIndex = index
-        needsDisplay = true
-        highlightTimer?.invalidate()
-        highlightTimer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: false) { [weak self] _ in
-            self?.highlightedIndex = nil
-            self?.needsDisplay = true
-        }
+        return placed.firstIndex { $0.rect.contains(point) }
     }
 
     /// 触控板双指捏合，回传放大倍数（1.0 表示没变）。
@@ -149,8 +169,14 @@ final class CompareView: NSView {
                 alpha: isDark ? 0.45 : 0.30).cgColor
     }
 
-    private var highlightColor: NSColor {
-        NSColor.controlAccentColor.withAlphaComponent(isDark ? 0.30 : 0.14)
+    /// 追加和复制用不同颜色闪，一眼能分清刚才那下干了什么。
+    private var flashColor: NSColor {
+        switch flashStyle {
+        case .append:
+            return NSColor.controlAccentColor.withAlphaComponent(isDark ? 0.30 : 0.14)
+        case .copy:
+            return NSColor.systemGreen.withAlphaComponent(isDark ? 0.34 : 0.20)
+        }
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -346,9 +372,9 @@ final class CompareView: NSView {
 
         let (placed, _) = layoutCells(in: bounds.width)
 
-        // 复制反馈：给点中的那一列垫个底色
+        // 点击反馈：给点中的那一列垫个底色
         if let index = highlightedIndex, index < placed.count {
-            highlightColor.setFill()
+            flashColor.setFill()
             let box = placed[index].rect.insetBy(dx: -3, dy: -3)
             NSBezierPath(roundedRect: box, xRadius: 5, yRadius: 5).fill()
         }
