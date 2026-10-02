@@ -310,8 +310,10 @@ final class MainViewController: NSViewController {
         stack.spacing = 10
         stack.edgeInsets = NSEdgeInsets(top: 8, left: 16, bottom: 8, right: 16)
 
-        let title = NSTextField(labelWithString: "字符")
+        let title = ClickableLabel(title: "字符")
         title.textColor = .secondaryLabelColor
+        title.toolTip = "点一下：从 txt 文件读取字符"
+        title.onClick = { [weak self] in self?.loadCharactersFromFile() }
         title.setContentHuggingPriority(.defaultHigh, for: .horizontal)
 
         charTextView.isRichText = false
@@ -578,6 +580,41 @@ final class MainViewController: NSViewController {
         compareView.overlayMode = overlay
         applyCharacters()
         refreshFonts()
+    }
+
+    // MARK: - 从 txt 读取字符
+
+    /// 点「字符」这两个字：选一个 txt，把里面的字读进输入框（整份替换）。
+    private func loadCharactersFromFile() {
+        let panel = NSOpenPanel()
+        panel.message = "选一个 txt 文件，里面的字会读进输入框"
+        panel.prompt = "读取"
+        panel.allowedContentTypes = [.plainText, .text]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        // 上次读过的文件夹优先，其次跟着字体 A 走。
+        if let dir = settings.string(forKey: "charFileDir") {
+            panel.directoryURL = URL(fileURLWithPath: dir)
+        } else {
+            panel.directoryURL = itemA?.url.deletingLastPathComponent()
+                ?? itemB?.url.deletingLastPathComponent()
+        }
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        // 中文 txt 未必是 UTF-8，让系统自己去猜编码。
+        var encoding: UInt = 0
+        guard let text = try? NSString(contentsOf: url, usedEncoding: &encoding) else {
+            let alert = NSAlert()
+            alert.messageText = "读不了这个文件"
+            alert.informativeText = "\(url.lastPathComponent) 不是纯文本，或者编码认不出来。"
+            alert.runModal()
+            return
+        }
+
+        settings.set(url.deletingLastPathComponent().path, forKey: "charFileDir")
+        charTextView.string = text as String
+        applyCharacters()
+        updateCharFieldHeight()
     }
 
     /// 保留重复字符——重复本身可能就是有意的分组，换行和制表符不算字符。
