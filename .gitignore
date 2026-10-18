@@ -1,7 +1,7 @@
 # 构建产物
 .build/
 .swiftpm/
-FontCompare.app/
+CharDiff.app/
 
 # macOS
 .DS_Store

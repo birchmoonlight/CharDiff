@@ -1,14 +1,14 @@
 #!/bin/bash
-# 打包成可双击运行的 FontCompare.app
+# 打包成可双击运行的 CharDiff.app
 set -e
 cd "$(dirname "$0")"
 
 swift build -c release
 
-APP="FontCompare.app"
+APP="CharDiff.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp .build/release/FontCompare "$APP/Contents/MacOS/FontCompare"
+cp .build/release/CharDiff "$APP/Contents/MacOS/CharDiff"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -16,9 +16,9 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <plist version="1.0">
 <dict>
 	<key>CFBundleExecutable</key>
-	<string>FontCompare</string>
+	<string>CharDiff</string>
 	<key>CFBundleIdentifier</key>
-	<string>local.fontcompare</string>
+	<string>local.chardiff</string>
 	<key>CFBundleName</key>
 	<string>字体字符对比</string>
 	<key>CFBundleDisplayName</key>

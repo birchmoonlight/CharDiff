@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "FontCompare",
+    name: "CharDiff",
     platforms: [.macOS(.v13)],
     targets: [
         .executableTarget(
-            name: "FontCompare",
-            path: "Sources/FontCompare"
+            name: "CharDiff",
+            path: "Sources/CharDiff"
         )
     ]
 )
