@@ -5,7 +5,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var window: NSWindow?
 
     /// 与 MainViewController 用同一个 suite。
-    private let settings = UserDefaults(suiteName: "local.fontcompare") ?? .standard
+    private let settings: UserDefaults = .appSettings
 
     private struct LaunchOptions {
         var fontA: URL?
@@ -105,6 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        AppSettings.migrate()
         setupMenu()
         if launch.dark {
             NSApp.appearance = NSAppearance(named: .darkAqua)

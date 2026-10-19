@@ -116,7 +116,7 @@ final class MainViewController: NSViewController {
     // MARK: - 设置记忆
 
     /// 用固定 suite，命令行版和 .app 版共用同一份设置。
-    private let settings = UserDefaults(suiteName: "local.fontcompare") ?? .standard
+    private let settings: UserDefaults = .appSettings
 
     private var scrollAccumulator: CGFloat = 0
 
