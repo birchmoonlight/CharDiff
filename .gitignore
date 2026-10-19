@@ -8,3 +8,6 @@ CharDiff.app/
 
 # 替身 / 别名文件
 *替身
+
+# 发布压缩包
+CharDiff-*.zip
